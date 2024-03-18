@@ -1,0 +1,126 @@
+services:
+  php-fpm:
+    build:
+      context: ./docker/php-fpm
+      args:
+        - PHP_VERSION=${PHP_VERSION}
+    container_name: ${COMPOSE_PROJECT_NAME}-php-fpm
+    restart: always
+    volumes:
+      - ./docker/php-fpm/php${PHP_VERSION}.ini-development:/usr/local/etc/php/php.ini
+      - ${APP_CODE_PATH_HOST}:${APP_CODE_PATH_CONTAINER}
+
+  nginx:
+    build:
+      context: ./docker/nginx
+      args:
+        - NGINX_VERSION=${NGINX_VERSION}
+        - PHP_UPSTREAM_CONTAINER=${NGINX_PHP_UPSTREAM_CONTAINER}
+        - PHP_UPSTREAM_PORT=${NGINX_PHP_UPSTREAM_PORT}
+    container_name: ${COMPOSE_PROJECT_NAME}-nginx
+    restart: always
+    depends_on:
+      - php-fpm
+    volumes:
+      - ${APP_CODE_PATH_HOST}:${APP_CODE_PATH_CONTAINER}
+      - ${NGINX_SITES_PATH}:/etc/nginx/sites-available
+      - ${NGINX_FILE_CONFIG}:/etc/nginx/nginx.conf
+    ports:
+      - "${NGINX_HOST_HTTP_PORT}:80"
+
+  mysql:
+    build:
+      context: ./docker/mysql
+      args:
+        - MYSQL_VERSION=${MYSQL_VERSION}
+    container_name: ${COMPOSE_PROJECT_NAME}-mysql
+    restart: always
+    healthcheck:
+      test: [ "CMD", "mysqladmin", "ping", "-h", "localhost" ]
+      interval: 10s
+      timeout: 2s
+      retries: 20
+    environment:
+        - MYSQL_DATABASE=${MYSQL_DATABASE}
+        - MYSQL_USER=${MYSQL_USER}
+        - MYSQL_PASSWORD=${MYSQL_PASSWORD}
+        - MYSQL_ROOT_PASSWORD=${MYSQL_ROOT_PASSWORD}
+        - TZ=${WORKSPACE_TIMEZONE}
+    volumes:
+      - ${DATA_PATH_HOST}/mysql:/var/lib/mysql
+    ports:
+      - "${MYSQL_PORT}:3306"
+
+  adminer:
+    build:
+      context: ./docker/adminer
+      args:
+        - ADMINER_VERSION=${ADMINER_VERSION}
+    container_name: ${COMPOSE_PROJECT_NAME}-adminer
+    restart: always
+    environment:
+      - ADMINER_DEFAULT_SERVER=${ADMINER_DEFAULT_SERVER}
+    ports:
+      - "${ADMINER_PORT}:8080"
+
+  rabbitmq:
+    build:
+      context: ./docker/rabbitmq
+      args:
+        - RABBITMQ_VERSION=${RABBITMQ_VERSION}
+    container_name: ${COMPOSE_PROJECT_NAME}-rabbitmq
+    restart: always
+    privileged: true
+    hostname: ${COMPOSE_PROJECT_NAME}-rabbitmq
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 2s
+      retries: 20
+    volumes:
+      - ${DATA_PATH_HOST}/rabbitmq:/var/lib/rabbitmq
+      - ./docker/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+      - ./docker/rabbitmq/management_agent.disable_metrics_collector.conf:/etc/rabbitmq/conf.d/management_agent.disable_metrics_collector.conf
+    ports:
+      - "${RABBITMQ_NODE_HOST_PORT}:5672"
+      - "${RABBITMQ_MANAGEMENT_HTTP_HOST_PORT}:15672"
+      - "${RABBITMQ_MANAGEMENT_HTTPS_HOST_PORT}:15671"
+      - "${RABBITMQ_WEB_STOMP_HOST_PORT}:15674"
+
+  php-worker:
+    build:
+      context: ./docker/php-worker
+      args:
+        - PHP_VERSION=${PHP_VERSION}
+    container_name: ${COMPOSE_PROJECT_NAME}-php-worker
+    restart: always
+    environment:
+      - TZ=${WORKSPACE_TIMEZONE}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - ./docker/php-fpm/php${PHP_VERSION}.ini-development:/usr/local/etc/php/php.ini
+      - ${APP_CODE_PATH_HOST}:${APP_CODE_PATH_CONTAINER}
+      - ./docker/php-worker/supervisord.conf:/etc/supervisor/supervisord.conf
+      - ./docker/php-worker/conf.d:/etc/supervisor/conf.d
+
+  phpmyadmin:
+    build:
+      context: ./docker/phpmyadmin
+      args:
+        - PMA_VERSION=${PMA_VERSION}
+    container_name: ${COMPOSE_PROJECT_NAME}-phpmyadmin
+    restart: always
+    environment:
+      - PMA_ARBITRARY=1
+      - MYSQL_USER=${PMA_USER}
+      - MYSQL_PASSWORD=${PMA_PASSWORD}
+      - MYSQL_ROOT_PASSWORD=${PMA_ROOT_PASSWORD}
+      - MAX_EXECUTION_TIME=${PMA_MAX_EXECUTION_TIME}
+      - MEMORY_LIMIT=${PMA_MEMORY_LIMIT}
+      - UPLOAD_LIMIT=${PMA_UPLOAD_LIMIT}
+    ports:
+      - "${PMA_PORT}:80"
+    depends_on:
+      - "${PMA_DB_ENGINE}"
